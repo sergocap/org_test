@@ -6,6 +6,14 @@ class Value < ApplicationRecord
   has_many :list_item_values, dependent: :destroy
   has_many :list_items, through: :list_item_values
 
+  def displayed?
+    category_property.show_on_public
+  end
+
+  def category_property
+    @category_property ||= CategoryProperty.where(:property_id => property.id,
+                           :category_id => organization.category.id).first
+  end
 
   searchable do
     integer :list_item_ids, multiple: true do
@@ -43,25 +51,39 @@ class Value < ApplicationRecord
   end
 
   def get
-    case property.kind.to_sym
+    res = case property.kind.to_sym
     when :boolean
       boolean_value ? 'Есть' : 'Нет'
     when :string
-      string_value
+      case category_property.show_as
+      when 'string'
+        string_value
+      when 'link'
+        unless string_value.blank?
+          "<a target='blank' href=\"#{string_value}\">#{string_value.truncate(50)}</a>".html_safe
+        end
+      end
     when :float
       float_value
     when :integer
       integer_value
     when :limited_list
-      list_item
+      list_item.try(:title)
     when :unlimited_list
-      list_items.map(&:title).join('; ')
+      unless list_items.empty?
+        lis = list_items.map {|item| "<li>#{item.title}</li>" }.join
+        "<ul class='tags'>#{lis}</ul>".html_safe
+      end
     when :hierarch_limited_list
-      return nil unless hierarch_list_item.present?
-      [hierarch_list_item.parent.title, hierarch_list_item.title].join(' - ')
+      if hierarch_list_item.present?
+        [hierarch_list_item.parent.title, hierarch_list_item.title].join(' - ')
+      end
     else
       ''
     end
+
+    res = 'не указано' if res.blank?
+    res
   end
 
   def pretty_view

@@ -21,8 +21,14 @@ class Organization < ApplicationRecord
   has_attached_file :logotype, styles: { medium: "300x300>", thumb: "100x100>"  }, default_url: "/images/missing.jpg"
   validates_attachment_content_type :logotype, content_type: /\Aimage\/.*\z/
 
+  after_save     :create_redis_record
+  before_destroy :destroy_redis_record
+
   include SettingsStateMachine
   include Bootsy::Container
+
+  extend FriendlyId
+  friendly_id :title, use: [:slugged, :finders]
 
   delegate :latitude, :longitude, :to => :address, :allow_nil => true
   after_initialize :set_initial_status
@@ -88,8 +94,9 @@ class Organization < ApplicationRecord
   end
 
   def check_necessarily
-    values.each do |value|
-      errors.add(value.property.title, 'Не может быть пустым') if !value.get.present? && category_property(value.property).necessarily
+    sort_values.each do |value|
+      errors.add(value.property.title, 'Не может быть пустым') if value.get == 'не указано' &&
+        category_properties.find {|cp| cp.property_id == value.property_id }.necessarily
     end
   end
 
@@ -97,8 +104,63 @@ class Organization < ApplicationRecord
     '{' + values.map {|value| '"'+ value.id.to_s + '":' + value.pretty_view }.join(',') + '}'
   end
 
+  # валидные значения
+  def sort_values
+    category_properties.map {|cp| values.find { |value| value.property_id == cp.property_id } }
+  end
+
+  def fast_dynamic_fields
+    begin
+      @fast_dynamic_fields = $redis.get("organization_dynamic_fields:#{id}")
+      raise 'no dynamic fields in redis' if @fast_dynamic_fields.blank?
+    rescue
+      fast_dynamic_fields_record
+      retry
+    end
+    JSON.parse @fast_dynamic_fields
+  end
+
+  def create_redis_record
+    fast_dynamic_fields_record
+    return nil unless user
+    datas_for_user = {
+      id => {
+        title:          title,
+        url:            "#{Settings['app.host']}/#{city.slug}/organizations/#{slug}",
+        main_photo_url: "#{Settings['app.host']}#{logotype.url(:thumb)}",
+        state: I18n.t("state.#{state}")
+      }.to_json
+    }
+
+    datas_for_autocomplete_place = {
+      'title'          =>    title,
+      'url'            =>    "#{Settings['app.host']}/#{city.slug}/organizations/#{slug}",
+      'main_photo_url' =>    "#{Settings['app.host']}#{logotype.url(:thumb)}",
+      'longitude'      =>    address.longitude,
+      'latitude'       =>    address.latitude
+    }
+
+    RedisUserConnector.set("#{user.id}:organizations", datas_for_user.to_a.flatten)
+
+    $redis.hmset("organization:#{id}", *datas_for_autocomplete_place.to_a.flatten) if self.published?
+  end
+
   private
-  def category_property(property)
-    CategoryProperty.where(:category_id => category.id, :property_id => property.id).first
+  def fast_dynamic_fields_record
+    dynamic_fields = sort_values.inject({}) {|h,v| h[v.property.title] = v.get; h}
+    $redis.set("organization_dynamic_fields:#{id}", dynamic_fields.to_json)
+  end
+
+  def destroy_redis_record
+    RedisUserConnector.clean("#{user.id}:organizations", id) if user
+    $redis.del("organization:#{id}")
+    $redis.del("organization_dynamic_fields:#{id}")
+  end
+
+  def category_properties
+    return CategoryProperty.none unless category.present?
+    CategoryProperty.where(category_id: category.id,
+                           property_id: values.pluck(:property_id),
+                           show_on_public: true).sort_by(&:row_order)
   end
 end
