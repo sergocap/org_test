@@ -122,27 +122,31 @@ class Organization < ApplicationRecord
 
   def create_redis_record
     fast_dynamic_fields_record
-    return nil unless user
-    datas_for_user = {
-      id => {
-        title:          title,
-        url:            "#{Settings['app.host']}/#{city.slug}/organizations/#{slug}",
-        main_photo_url: "#{Settings['app.host']}#{logotype.url(:thumb)}",
-        state: I18n.t("state.#{state}")
-      }.to_json
-    }
 
-    datas_for_autocomplete_place = {
-      'title'          =>    title,
-      'url'            =>    "#{Settings['app.host']}/#{city.slug}/organizations/#{slug}",
-      'main_photo_url' =>    "#{Settings['app.host']}#{logotype.url(:thumb)}",
-      'longitude'      =>    address.longitude,
-      'latitude'       =>    address.latitude
-    }
+    if user.present?
+      datas_for_user = {
+        id => {
+          title:          title,
+          url:            "#{Settings['app.host']}/#{city.slug}/organizations/#{slug}",
+          main_photo_url: "#{Settings['app.host']}#{logotype.url(:thumb)}",
+          state: I18n.t("state.#{state}")
+        }.to_json
+      }
 
-    RedisUserConnector.set("#{user.id}:organizations", datas_for_user.to_a.flatten)
+      RedisUserConnector.set("#{user.id}:organizations", datas_for_user.to_a.flatten) if user
+    end
 
-    $redis.hmset("organization:#{id}", *datas_for_autocomplete_place.to_a.flatten) if self.published?
+    if address.present? && self.published?
+      datas_for_autocomplete_place = {
+        'title'          =>    title,
+        'url'            =>    "#{Settings['app.host']}/#{city.slug}/organizations/#{slug}",
+        'main_photo_url' =>    "#{Settings['app.host']}#{logotype.url(:thumb)}",
+        'longitude'      =>    address.longitude,
+        'latitude'       =>    address.latitude
+      }
+
+      $redis.hmset("organization:#{id}", *datas_for_autocomplete_place.to_a.flatten)
+    end
   end
 
   private
