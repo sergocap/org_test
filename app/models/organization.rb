@@ -136,20 +136,20 @@ class Organization < ApplicationRecord
       RedisUserConnector.set("#{user.id}:organizations", datas_for_user.to_a.flatten) if user
     end
 
-    if address.present? && self.published?
+    if city.present? && address.present? && self.published?
       datas_for_autocomplete_place = {
         'title'          =>    title,
+        'address'        =>    address.to_s,
         'url'            =>    "#{Settings['app.host']}/#{city.slug}/organizations/#{slug}",
         'main_photo_url' =>    "#{Settings['app.host']}#{logotype.url(:thumb)}",
-        'longitude'      =>    address.longitude,
-        'latitude'       =>    address.latitude
+        'longitude'      =>    longitude,
+        'latitude'       =>    latitude
       }
 
-      $redis.hmset("organization:#{id}", *datas_for_autocomplete_place.to_a.flatten)
+      $redis.hmset("city:#{city.id}:organization:#{id}", *datas_for_autocomplete_place.to_a.flatten)
     end
   end
 
-  private
   def fast_dynamic_fields_record
     dynamic_fields = sort_values.inject({}) {|h,v| h[v.property.title] = v.get; h}
     $redis.set("organization_dynamic_fields:#{id}", dynamic_fields.to_json)
@@ -157,10 +157,11 @@ class Organization < ApplicationRecord
 
   def destroy_redis_record
     RedisUserConnector.clean("#{user.id}:organizations", id) if user
-    $redis.del("organization:#{id}")
+    $redis.del("city:#{city.id}:organization:#{id}")
     $redis.del("organization_dynamic_fields:#{id}")
   end
 
+  private
   def category_properties
     return CategoryProperty.none unless category.present?
     CategoryProperty.where(category_id: category.id,
